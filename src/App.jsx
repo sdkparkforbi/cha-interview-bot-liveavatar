@@ -134,22 +134,8 @@ function normalizeTtsText(text) {
     .trim()
 }
 
-// LiveAvatar DataChannel 커맨드 — 발화/중단/듣기 시작 등을 publishData로 전송
-// agent identity (보통 'heygen')에 destination을 명시해야 일부 LiveAvatar agent가 응답함.
-function findAgentIdentity(room) {
-  if (!room || !room.remoteParticipants) return null
-  // remoteParticipants는 Map (livekit-client v2+) 또는 객체일 수 있음
-  const it = typeof room.remoteParticipants?.values === 'function'
-    ? room.remoteParticipants.values()
-    : Object.values(room.remoteParticipants || {})
-  for (const p of it) {
-    if (!p) continue
-    const id = p.identity || ''
-    if (id && id !== 'client') return id  // 'heygen' 또는 agent ID
-  }
-  return null
-}
-
+// LiveAvatar DataChannel 커맨드 — v11 정확 복원 (broadcast publishData)
+// destinationIdentities 시도 결과 무효 → v11처럼 모든 참가자에 broadcast가 정답
 function sendAvatarCommand(room, eventType, data) {
   if (!room || !room.localParticipant) {
     console.warn('[LA] sendAvatarCommand skipped: no room/localParticipant', { eventType, hasRoom: !!room })
@@ -157,12 +143,17 @@ function sendAvatarCommand(room, eventType, data) {
   }
   const cmd = Object.assign({ event_type: eventType }, data || {})
   const encoded = new TextEncoder().encode(JSON.stringify(cmd))
-  const agentIdentity = findAgentIdentity(room)
-  const opts = { reliable: true, topic: 'agent-control' }
-  if (agentIdentity) opts.destinationIdentities = [agentIdentity]
   try {
-    room.localParticipant.publishData(encoded, opts)
-    console.log('[LA] sendAvatarCommand:', eventType, 'dest=', agentIdentity || 'broadcast')
+    room.localParticipant.publishData(encoded, { reliable: true, topic: 'agent-control' })
+    // 디버그: 같은 시점의 remoteParticipants 상태도 함께 로깅 (agent join 여부 확인)
+    let participants = []
+    try {
+      const it = typeof room.remoteParticipants?.values === 'function'
+        ? Array.from(room.remoteParticipants.values())
+        : Object.values(room.remoteParticipants || {})
+      participants = it.map(p => p?.identity).filter(Boolean)
+    } catch {}
+    console.log('[LA] sendAvatarCommand:', eventType, 'remoteParticipants:', participants, 'payload:', JSON.stringify(cmd).slice(0, 80))
   } catch (e) {
     console.error('[LA] publishData error:', e)
   }
