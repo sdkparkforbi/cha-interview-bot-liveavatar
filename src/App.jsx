@@ -134,26 +134,30 @@ function normalizeTtsText(text) {
     .trim()
 }
 
-// LiveAvatar DataChannel 커맨드 — v11 정확 복원 (broadcast publishData)
-// destinationIdentities 시도 결과 무효 → v11처럼 모든 참가자에 broadcast가 정답
+// LiveAvatar DataChannel 커맨드 — heygen-com/liveavatar-web-sdk 공식 spec
+// 핵심: 모든 command에 event_id (UUID) 필수. 누락 시 agent가 invalid event로 drop함.
+function generateEventId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 function sendAvatarCommand(room, eventType, data) {
   if (!room || !room.localParticipant) {
     console.warn('[LA] sendAvatarCommand skipped: no room/localParticipant', { eventType, hasRoom: !!room })
     return
   }
-  const cmd = Object.assign({ event_type: eventType }, data || {})
+  const cmd = Object.assign(
+    { event_id: generateEventId(), event_type: eventType },
+    data || {}
+  )
   const encoded = new TextEncoder().encode(JSON.stringify(cmd))
   try {
     room.localParticipant.publishData(encoded, { reliable: true, topic: 'agent-control' })
-    // 디버그: 같은 시점의 remoteParticipants 상태도 함께 로깅 (agent join 여부 확인)
-    let participants = []
-    try {
-      const it = typeof room.remoteParticipants?.values === 'function'
-        ? Array.from(room.remoteParticipants.values())
-        : Object.values(room.remoteParticipants || {})
-      participants = it.map(p => p?.identity).filter(Boolean)
-    } catch {}
-    console.log('[LA] sendAvatarCommand:', eventType, 'remoteParticipants:', participants, 'payload:', JSON.stringify(cmd).slice(0, 80))
+    console.log('[LA] sendAvatarCommand:', eventType, 'event_id:', cmd.event_id.slice(0, 8))
   } catch (e) {
     console.error('[LA] publishData error:', e)
   }
