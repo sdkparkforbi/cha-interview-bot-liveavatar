@@ -135,6 +135,21 @@ function normalizeTtsText(text) {
 }
 
 // LiveAvatar DataChannel 커맨드 — 발화/중단/듣기 시작 등을 publishData로 전송
+// agent identity (보통 'heygen')에 destination을 명시해야 일부 LiveAvatar agent가 응답함.
+function findAgentIdentity(room) {
+  if (!room || !room.remoteParticipants) return null
+  // remoteParticipants는 Map (livekit-client v2+) 또는 객체일 수 있음
+  const it = typeof room.remoteParticipants?.values === 'function'
+    ? room.remoteParticipants.values()
+    : Object.values(room.remoteParticipants || {})
+  for (const p of it) {
+    if (!p) continue
+    const id = p.identity || ''
+    if (id && id !== 'client') return id  // 'heygen' 또는 agent ID
+  }
+  return null
+}
+
 function sendAvatarCommand(room, eventType, data) {
   if (!room || !room.localParticipant) {
     console.warn('[LA] sendAvatarCommand skipped: no room/localParticipant', { eventType, hasRoom: !!room })
@@ -142,9 +157,12 @@ function sendAvatarCommand(room, eventType, data) {
   }
   const cmd = Object.assign({ event_type: eventType }, data || {})
   const encoded = new TextEncoder().encode(JSON.stringify(cmd))
+  const agentIdentity = findAgentIdentity(room)
+  const opts = { reliable: true, topic: 'agent-control' }
+  if (agentIdentity) opts.destinationIdentities = [agentIdentity]
   try {
-    room.localParticipant.publishData(encoded, { reliable: true, topic: 'agent-control' })
-    console.log('[LA] sendAvatarCommand:', eventType, data ? Object.keys(data) : '')
+    room.localParticipant.publishData(encoded, opts)
+    console.log('[LA] sendAvatarCommand:', eventType, 'dest=', agentIdentity || 'broadcast')
   } catch (e) {
     console.error('[LA] publishData error:', e)
   }
