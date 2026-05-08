@@ -87,6 +87,10 @@ docs/GUIDE.md
 docs/DEVLOG.md
 docs/INTERNAL*.md
 
+# Claude Code 작업 지침 (로컬에만 유지, GitHub 노출 X)
+CLAUDE.md
+.claude/
+
 # ─────────────────────────────────────────────
 # IDE / OS
 # ─────────────────────────────────────────────
