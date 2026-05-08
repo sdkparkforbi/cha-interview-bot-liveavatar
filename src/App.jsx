@@ -136,10 +136,18 @@ function normalizeTtsText(text) {
 
 // LiveAvatar DataChannel 커맨드 — 발화/중단/듣기 시작 등을 publishData로 전송
 function sendAvatarCommand(room, eventType, data) {
-  if (!room || !room.localParticipant) return
+  if (!room || !room.localParticipant) {
+    console.warn('[LA] sendAvatarCommand skipped: no room/localParticipant', { eventType, hasRoom: !!room })
+    return
+  }
   const cmd = Object.assign({ event_type: eventType }, data || {})
   const encoded = new TextEncoder().encode(JSON.stringify(cmd))
-  room.localParticipant.publishData(encoded, { reliable: true, topic: 'agent-control' })
+  try {
+    room.localParticipant.publishData(encoded, { reliable: true, topic: 'agent-control' })
+    console.log('[LA] sendAvatarCommand:', eventType, data ? Object.keys(data) : '')
+  } catch (e) {
+    console.error('[LA] publishData error:', e)
+  }
 }
 
 async function stopLiveAvatarSession(sessionId) {
@@ -752,34 +760,71 @@ export default function App() {
       roomRef.current = room
 
       room.on(window.LivekitClient.RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
-        if (topic && topic !== 'agent-response') return
         try {
-          const evt = JSON.parse(new TextDecoder().decode(payload))
+          const text = new TextDecoder().decode(payload)
+          const evt = JSON.parse(text)
           const type = evt.event_type || evt.type || ''
-          if (type === 'avatar.speak_started') setStatus('speaking')
-          if (type === 'avatar.speak_ended')   setStatus('connected')
-          if (type === 'session.stopped')      console.log('[LA] session stopped by server')
-        } catch {}
+          console.log('[LA] DataReceived topic=' + topic + ' type=' + type, evt)
+          if (topic && topic !== 'agent-response') return
+          if (type === 'avatar.speak_started') {
+            isSpeakingRef.current = true
+            setStatus('speaking')
+          }
+          if (type === 'avatar.speak_ended') {
+            isSpeakingRef.current = false
+            setStatus('connected')
+          }
+          if (type === 'session.stopped') console.log('[LA] session stopped by server')
+        } catch (e) {
+          console.warn('[LA] DataReceived parse error:', e)
+        }
       })
 
-      room.on(window.LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+      room.on(window.LivekitClient.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        console.log('[LA] TrackSubscribed:', track.kind, 'from', participant?.identity)
         if (track.kind === 'video') {
           avatarVideoTrackRef.current = track
           if (videoRef.current) {
             track.attach(videoRef.current)
             setVideoReady(true)
+            console.log('[LA] video track attached')
+          } else {
+            console.warn('[LA] videoRef.current is null at TrackSubscribed')
           }
         }
         if (track.kind === 'audio') {
           avatarAudioTrackRef.current = track
           if (audioRef.current) {
             track.attach(audioRef.current)
-            audioRef.current.play?.().catch(() => {})
+            audioRef.current.play?.().catch(err => console.warn('[LA] audio play() blocked:', err))
+            console.log('[LA] audio track attached')
+          } else {
+            console.warn('[LA] audioRef.current is null at TrackSubscribed')
           }
         }
       })
 
+      room.on(window.LivekitClient.RoomEvent.Disconnected, (reason) => {
+        console.warn('[LA] Disconnected, reason:', reason)
+        isSpeakingRef.current = false
+        setStatus('connected')
+      })
+
+      room.on(window.LivekitClient.RoomEvent.ConnectionStateChanged, (state) => {
+        console.log('[LA] ConnectionState:', state)
+      })
+
+      console.log('[LA] connecting to', sess.livekit_url, 'session:', sess.session_id)
       await room.connect(sess.livekit_url, sess.livekit_client_token)
+      console.log('[LA] room.connect OK, state:', room.state)
+
+      // 마이크 활성화 — LiveAvatar LITE 모드는 사용자 트랙으로 서버 STT 진행
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true)
+        console.log('[LA] microphone enabled')
+      } catch (e) {
+        console.warn('[LA] setMicrophoneEnabled error:', e)
+      }
 
       // 세션 유지 — LiveAvatar 세션은 일정 시간 유휴 시 자동 종료되므로 주기적 keep-alive
       keepAliveIntervalRef.current = setInterval(() => {
