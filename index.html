@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+    <!-- 카카오톡 인앱 브라우저 → 외부 브라우저 강제 전환 (마이크/WebRTC 권한 위함) -->
+    <script>
+    (function(){
+      var ua = navigator.userAgent || '';
+      if (/KAKAOTALK/i.test(ua)) {
+        var currentUrl = location.href;
+        if (/Android/i.test(ua)) {
+          // Android: Chrome으로 intent
+          location.href = 'intent://' + currentUrl.replace(/https?:\/\//, '') +
+            '#Intent;scheme=https;package=com.android.chrome;end';
+          return;
+        }
+        if (/iPhone|iPad|iPod/i.test(ua)) {
+          // iOS: 카톡 자체의 외부 브라우저 열기 스킴 사용 (시스템 기본 브라우저 = Safari)
+          location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(currentUrl);
+          return;
+        }
+      }
+    })();
+    </script>
+
+    <title>차의과학대 신입생 전공상담 봇</title>
+    <meta name="description" content="차의과학대학교 신입생을 위한 AI 전공 소개·진로상담 면담봇. 음성·텍스트로 상담하세요." />
+
+    <!-- Open Graph (카카오톡 / 페이스북 미리보기) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="차의과학대 신입생 전공상담 봇" />
+    <meta property="og:description" content="AI 면담 어시스턴트와 음성·텍스트로 전공 소개와 진로 상담을 받아보세요." />
+    <meta property="og:url" content="https://cha-interview-bot.vercel.app/" />
+    <meta property="og:image" content="https://cha-interview-bot.vercel.app/og-thumbnail.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="ko_KR" />
+    <meta property="og:site_name" content="차의과학대학교 신입생 전공상담" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="차의과학대 신입생 전공상담 봇" />
+    <meta name="twitter:description" content="AI 면담 어시스턴트와 음성·텍스트로 전공 소개와 진로 상담." />
+    <meta name="twitter:image" content="https://cha-interview-bot.vercel.app/og-thumbnail.png" />
+
+    <!-- favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='65' font-size='60' text-anchor='middle'%3E%F0%9F%91%A8%E2%80%8D%F0%9F%8F%AB%3C/text%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <script src="https://developers.kakao.com/sdk/js/kakao.min.js"></script>
+    <script>
+      // 카카오 SDK init (한 번만)
+      window.addEventListener('DOMContentLoaded', function () {
+        try {
+          if (window.Kakao && !window.Kakao.isInitialized()) {
+            window.Kakao.init('fc0a1313d895b1956f3830e5bf14307b');
+          }
+        } catch (e) { console.error('Kakao init error:', e); }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
