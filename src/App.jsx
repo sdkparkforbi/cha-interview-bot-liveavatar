@@ -807,13 +807,16 @@ export default function App() {
         }
         if (track.kind === 'audio') {
           avatarAudioTrackRef.current = track
-          if (audioRef.current) {
-            track.attach(audioRef.current)
-            audioRef.current.play?.().catch(err => console.warn('[LA] audio play() blocked:', err))
-            console.log('[LA] audio track attached')
-          } else {
-            console.warn('[LA] audioRef.current is null at TrackSubscribed')
-          }
+          // v11/공식 SDK 패턴: 트랙마다 별도 audio element 생성 + body append.
+          // (TrackSubscribed가 'heygen'·'liveavatar-agent-...' 둘 다 옴 — 같은 audioRef에 attach
+          //  하면 두 번째가 첫 번째 덮어써서 발화 트랙이 재생 안 됨)
+          const audioEl = track.attach()
+          audioEl.autoplay = true
+          audioEl.dataset.laTrack = participant?.identity || 'unknown'
+          audioEl.style.display = 'none'
+          document.body.appendChild(audioEl)
+          audioEl.play?.().catch(err => console.warn('[LA] audio play() blocked:', err))
+          console.log('[LA] audio track attached (separate element) from', participant?.identity)
         }
       })
 
