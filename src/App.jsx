@@ -6,8 +6,9 @@ import SurveyModal from './components/SurveyModal'
 import styles from './App.module.css'
 import { getUser, clearAuth, verifyToken, newSessionId, saveChat } from './lib/api'
 
-const AVATAR_ID = 'e2eb35c947644f09820aa3a4f9c15488'
-const VOICE_ID  = '15d128072e194dc399d2898967941897'
+// LiveAvatar (HeyGen 후속, LiveKit 기반 WebRTC). avatar_id는 박대근 교수님 워크스페이스의 LiveAvatar UUID.
+const AVATAR_ID = '3554efce-af84-4701-981e-2cbd46e991af'
+const INTERACTIVITY_TYPE = 'CONVERSATIONAL'
 
 function isMobileSpeechBrowser() {
   if (typeof navigator === 'undefined') return false
@@ -133,13 +134,34 @@ function normalizeTtsText(text) {
     .trim()
 }
 
-async function callProxy(endpoint, payload) {
-  const res = await fetch('/api/heygen-proxy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ endpoint, payload })
-  })
-  return res.json()
+// LiveAvatar DataChannel 커맨드 — 발화/중단/듣기 시작 등을 publishData로 전송
+function sendAvatarCommand(room, eventType, data) {
+  if (!room || !room.localParticipant) return
+  const cmd = Object.assign({ event_type: eventType }, data || {})
+  const encoded = new TextEncoder().encode(JSON.stringify(cmd))
+  room.localParticipant.publishData(encoded, { reliable: true, topic: 'agent-control' })
+}
+
+async function stopLiveAvatarSession(sessionId) {
+  if (!sessionId) return
+  try {
+    await fetch('/api/liveavatar-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'stop', session_id: sessionId, reason: 'USER_CLOSED' })
+    })
+  } catch (e) { console.warn('[LA] stop 실패:', e) }
+}
+
+async function keepAliveLiveAvatar(sessionId) {
+  if (!sessionId) return
+  try {
+    await fetch('/api/liveavatar-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'keep-alive', session_id: sessionId })
+    })
+  } catch (e) { console.warn('[LA] keep-alive 실패:', e) }
 }
 
 export default function App() {
@@ -185,6 +207,7 @@ export default function App() {
   const cameraStreamRef   = useRef(null)
   const historyRef        = useRef([])
   const sessionIdRef      = useRef(null)   // 학교 DB용 세션 ID (아바타 시작 시 새로)
+  const keepAliveIntervalRef = useRef(null) // LiveAvatar keep-alive setInterval id
   const conversationModeRef = useRef('ftf')
 
   // 토큰 검증 — 성공하면 모달 닫음 / 실패하면 모달 유지 (이미 열려있음)
@@ -272,7 +295,7 @@ export default function App() {
 
   useEffect(() => () => stopUserCamera(), [stopUserCamera])
 
-  // ─── HeyGen interrupt ────────────────────────────
+  // ─── LiveAvatar interrupt ────────────────────────
   const interruptAvatar = useCallback(async () => {
     echoGuardUntilRef.current = Date.now() + getEchoGuardMs() + 600
     clearListeningRestart()
@@ -286,11 +309,9 @@ export default function App() {
     }
     isListeningRef.current = false
     setIsListening(false)
-    if (sessionRef.current) {
+    if (sessionRef.current && roomRef.current) {
       try {
-        await callProxy('streaming.interrupt', {
-          session_id: sessionRef.current.session_id
-        })
+        sendAvatarCommand(roomRef.current, 'avatar.interrupt')
       } catch (e) { console.error('interrupt error:', e) }
     }
     isSpeakingRef.current = false
@@ -338,15 +359,11 @@ export default function App() {
       // DB 저장 (어시스턴트 답변)
       if (sessionIdRef.current) saveChat(sessionIdRef.current, 'assistant', reply)
 
-      // HeyGen 발화
-      if (sessionRef.current && conversationModeRef.current !== 'ttt') {
+      // LiveAvatar 발화 — DataChannel 'avatar.speak_text' 커맨드
+      if (sessionRef.current && roomRef.current && conversationModeRef.current !== 'ttt') {
         isSpeakingRef.current = true
         setStatus('speaking')
-        await callProxy('streaming.task', {
-          session_id: sessionRef.current.session_id,
-          text: ttsReply,
-          task_type: 'repeat'
-        })
+        sendAvatarCommand(roomRef.current, 'avatar.speak_text', { text: ttsReply })
       }
     } catch {
       setMessages(prev => {
@@ -594,11 +611,15 @@ export default function App() {
     stopUserCamera()
     isSpeakingRef.current = false
 
-    // HeyGen 세션 종료 (best-effort)
+    // LiveAvatar keep-alive 타이머 정지
+    if (keepAliveIntervalRef.current) {
+      clearInterval(keepAliveIntervalRef.current)
+      keepAliveIntervalRef.current = null
+    }
+
+    // LiveAvatar 세션 종료 (best-effort)
     if (sessionRef.current) {
-      try {
-        await callProxy('streaming.stop', { session_id: sessionRef.current.session_id })
-      } catch (e) { console.warn('streaming.stop error:', e) }
+      await stopLiveAvatarSession(sessionRef.current.session_id)
     }
 
     // LiveKit 연결 끊기
@@ -705,28 +726,39 @@ export default function App() {
       stopUserCamera()
     }
     try {
-      const tokenRes = await fetch('/api/heygen-token', { method: 'POST' }).then(r => r.json())
-      if (!tokenRes.token) throw new Error('HeyGen 토큰 발급 실패: ' + JSON.stringify(tokenRes))
+      // LiveAvatar: token + start 통합 단일 엔드포인트
+      const sess = await fetch('/api/liveavatar-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          avatar_id: AVATAR_ID,
+          interactivity_type: INTERACTIVITY_TYPE
+        })
+      }).then(r => r.json())
+      if (!sess.livekit_url || !sess.livekit_client_token) {
+        throw new Error('LiveAvatar 세션 생성 실패: ' + JSON.stringify(sess))
+      }
+      sessionRef.current = sess  // { session_id, session_token, livekit_url, livekit_client_token }
 
-      const newRes = await callProxy('streaming.new', {
-        avatar_id: AVATAR_ID,
-        quality: 'medium',
-        voice: { voice_id: VOICE_ID, rate: 1.0, emotion: 'friendly' },
-        language: 'ko',
-        version: 'v2',
-        video_encoding: 'H264'
+      const room = new window.LivekitClient.Room({
+        adaptiveStream: true,
+        dynacast: true,
+        audioCaptureDefaults: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
       })
-      if (!newRes.data?.url) throw new Error('스트리밍 세션 생성 실패: ' + JSON.stringify(newRes))
-      sessionRef.current = newRes.data
-
-      const room = new window.LivekitClient.Room({ adaptiveStream: true, dynacast: true })
       roomRef.current = room
 
-      room.on(window.LivekitClient.RoomEvent.DataReceived, (payload) => {
+      room.on(window.LivekitClient.RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+        if (topic && topic !== 'agent-response') return
         try {
-          const msg = JSON.parse(new TextDecoder().decode(payload))
-          if (msg.type === 'avatar_start_talking') setStatus('speaking')
-          if (msg.type === 'avatar_stop_talking')  setStatus('connected')
+          const evt = JSON.parse(new TextDecoder().decode(payload))
+          const type = evt.event_type || evt.type || ''
+          if (type === 'avatar.speak_started') setStatus('speaking')
+          if (type === 'avatar.speak_ended')   setStatus('connected')
+          if (type === 'session.stopped')      console.log('[LA] session stopped by server')
         } catch {}
       })
 
@@ -747,8 +779,12 @@ export default function App() {
         }
       })
 
-      await room.connect(sessionRef.current.url, sessionRef.current.access_token)
-      await callProxy('streaming.start', { session_id: sessionRef.current.session_id })
+      await room.connect(sess.livekit_url, sess.livekit_client_token)
+
+      // 세션 유지 — LiveAvatar 세션은 일정 시간 유휴 시 자동 종료되므로 주기적 keep-alive
+      keepAliveIntervalRef.current = setInterval(() => {
+        keepAliveLiveAvatar(sess.session_id)
+      }, 60_000)
 
       setStatus('connected')
 
@@ -757,19 +793,15 @@ export default function App() {
       const greetingTts = normalizeTtsText(getGreetingTts(user))
 
       setMessages([{ role: 'assistant', text: greetingText }])
-      saveChat(sessionIdRef.current, 'assistant', greetingText)  // 인사말도 저장
+      saveChat(sessionIdRef.current, 'assistant', greetingText)
 
-      // 인사말 발화 (트랙 attach 직후엔 종종 첫 task 누락되므로 약간 지연)
+      // 인사말 발화 (트랙 attach 직후 첫 명령 누락 방지 위해 800ms 지연)
       isSpeakingRef.current = true
       setStatus('speaking')
-      setTimeout(async () => {
+      setTimeout(() => {
         try {
-          await callProxy('streaming.task', {
-            session_id: sessionRef.current.session_id,
-            text: greetingTts,
-            task_type: 'repeat'
-          })
-        } catch (e) { console.error('greeting task error:', e) }
+          sendAvatarCommand(roomRef.current, 'avatar.speak_text', { text: greetingTts })
+        } catch (e) { console.error('greeting speak error:', e) }
       }, 800)
 
       // 마이크 자동 활성화 (사용자 클릭(시작 버튼) 컨텍스트 안이라 권한 prompt 가능)
@@ -805,8 +837,8 @@ export default function App() {
   const changeConversationMode = useCallback(async (nextMode) => {
     if (nextMode === conversationModeRef.current) return
 
-    const hasHeyGenSession = Boolean(sessionRef.current)
-    const isTextOnlySession = status !== 'idle' && !hasHeyGenSession
+    const hasAvatarSession = Boolean(sessionRef.current)
+    const isTextOnlySession = status !== 'idle' && !hasAvatarSession
 
     if (isTextOnlySession && nextMode !== 'ttt') {
       alert('텍스트 상담에서 음성/화상으로 바꾸려면 대화를 종료한 뒤 다시 시작해주세요.')
@@ -817,7 +849,7 @@ export default function App() {
     setConversationMode(nextMode)
 
     if (nextMode === 'ftf') {
-      if (hasHeyGenSession) startUserCamera()
+      if (hasAvatarSession) startUserCamera()
     } else {
       stopUserCamera()
     }
@@ -829,7 +861,7 @@ export default function App() {
       return
     }
 
-    if (hasHeyGenSession) {
+    if (hasAvatarSession) {
       if (!recognitionRef.current) initRecognition()
       autoListenRef.current = true
       setAutoListen(true)
