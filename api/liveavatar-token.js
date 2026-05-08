@@ -40,7 +40,10 @@ export default async function handler(req, res) {
         "X-API-KEY": LIVEAVATAR_API_KEY,
       },
       body: JSON.stringify({
-        mode: "LITE",
+        // FULL 모드 — avatar.speak_text(외부 텍스트 발화 = HeyGen repeat 동등) 허용
+        // LITE 모드는 LiveAvatar 자체 STT+LLM 자동 응답 전용이라 외부 텍스트 발화 throw됨.
+        // 본 시스템은 미들턴(Gemma4)이 답변 생성 → LiveAvatar는 발화만 담당 → FULL 필수.
+        mode: "FULL",
         avatar_id: avatarId,
         is_sandbox: false,
         video_settings: {
