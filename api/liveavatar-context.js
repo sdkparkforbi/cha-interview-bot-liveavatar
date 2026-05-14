@@ -14,10 +14,7 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  const LIVEAVATAR_API_KEY = process.env.LIVEAVATAR_API_KEY;
-  if (!LIVEAVATAR_API_KEY) {
-    return res.status(500).json({ error: "API key not configured" });
-  }
+  const LIVEAVATAR_API_KEY = "0bbefe1ea4e6e2f5adc0121a38bcc9e2";
 
   try {
     const body = req.body || {};
